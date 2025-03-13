@@ -1,24 +1,22 @@
+import types
 from typing import Optional, Tuple
 
 import torch
 import torch.functional as F
 
+import transformers
 import transformers.models
-from transformers.models.llama.modeling_llama import (
-    LlamaForCausalLM,
-    CausalLMOutputWithPast,
-    List,
-    Union,
-    CrossEntropyLoss,
-    BaseModelOutputWithPast,
-    apply_rotary_pos_emb,
-)
-import types
-
 from flash_attn import flash_attn_func, flash_attn_varlen_func
 from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input
-
-import transformers
+from transformers.models.llama.modeling_llama import (
+    BaseModelOutputWithPast,
+    CausalLMOutputWithPast,
+    CrossEntropyLoss,
+    List,
+    LlamaForCausalLM,
+    Union,
+    apply_rotary_pos_emb,
+)
 
 
 def _get_unpad_data(padding_mask):
@@ -98,9 +96,22 @@ def old_flash_attention_2_forward(
     # in fp32. (LlamaRMSNorm handles it correctly)
     input_dtype = query_states.dtype
     if input_dtype == torch.float32:
-        query_states = query_states.to(torch.float16)
-        key_states = key_states.to(torch.float16)
-        value_states = value_states.to(torch.float16)
+        if torch.is_autocast_enabled():
+            target_dtype = torch.get_autocast_gpu_dtype()
+        # Handle the case where the model is quantized
+        elif hasattr(self.config, "_pre_quantization_dtype"):
+            target_dtype = self.config._pre_quantization_dtype
+        else:
+            target_dtype = self.q_proj.weight.dtype
+        from transformers.models.llama.modeling_llama import logger
+        logger.warning_once(
+            f"The input hidden states seems to be silently casted in float32, this might be related to"
+            f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
+            f" {target_dtype}."
+        )
+        query_states = query_states.to(target_dtype)
+        key_states = key_states.to(target_dtype)
+        value_states = value_states.to(target_dtype)
 
     attn_output = self._flash_attention_forward(
         query_states,
