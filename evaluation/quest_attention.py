@@ -75,7 +75,7 @@ def forward(
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     bsz, q_len, _ = hidden_states.size()
 
-    if q_len > 1 or self.layer_idx < 2:
+    if q_len > 1 or self.layer_idx in self.skip_layer_indices:
         return self.flash_forward(
             hidden_states,
             attention_mask,
@@ -254,3 +254,4 @@ def enable_quest_attention_eval(model, args):
 
             model._modules[name].token_budget = args.token_budget
             model._modules[name].chunk_size = args.chunk_size
+            model._modules[name].skip_layer_indices = args.skip_layer_indices
