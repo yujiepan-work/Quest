@@ -1,24 +1,18 @@
 import math
-import numpy as np
+import types
 from typing import Optional, Tuple, Union
 
 import torch
-from torch import nn
-import torch.utils.checkpoint
 import torch.nn.functional as F
+import torch.utils.checkpoint
+from torch import nn
 from torch.cuda.amp import autocast
 
-import types
-
-from transformers.models.llama.modeling_llama import (
-    LlamaAttention,
-    apply_rotary_pos_emb,
-    repeat_kv,
-)
-
+import numpy as np
 from transformers.cache_utils import DynamicCache
-
+from transformers.models.llama.modeling_llama import LlamaAttention, apply_rotary_pos_emb, repeat_kv
 from transformers.models.mistral.modeling_mistral import MistralAttention
+
 
 def local_heavy_hitter_mask(attn_weights, token_budget, chunk_size):
     # attn_weights (BS, head, query, keys)
@@ -81,7 +75,7 @@ def forward(
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
     bsz, q_len, _ = hidden_states.size()
 
-    if q_len > 1 or self.layer_id < 2:
+    if q_len > 1 or self.layer_idx < 2:
         return self.flash_forward(
             hidden_states,
             attention_mask,
@@ -107,7 +101,7 @@ def forward(
         .view(bsz, q_len, self.num_key_value_heads, self.head_dim)
         .transpose(1, 2)
     )
-    
+
     # New cache format
     if isinstance(past_key_value, DynamicCache):
         kv_seq_len = past_key_value.get_seq_length()
@@ -117,7 +111,7 @@ def forward(
         if past_key_value is not None:
             assert isinstance(past_key_value, tuple)
             kv_seq_len += past_key_value[0].shape[-2]
-    
+
     cos, sin = self.rotary_emb(value_states, position_ids.to(value_states.device))
     query_states, key_states = apply_rotary_pos_emb(
         query_states, key_states, cos, sin, position_ids
@@ -240,10 +234,6 @@ def forward(
     return attn_output, attn_weights, past_key_value
 
 
-global layer_id
-layer_id = 32
-
-
 def enable_quest_attention_eval(model, args):
     for name, module in reversed(model._modules.items()):
         if len(list(module.children())) > 0:
@@ -252,11 +242,11 @@ def enable_quest_attention_eval(model, args):
                 args,
             )
 
-        global layer_id
+        # global layer_id
         if isinstance(module, (LlamaAttention, MistralAttention)):
             # For longchat model
-            layer_id -= 1
-            model._modules[name].layer_id = layer_id
+            # layer_id -= 1
+            # model._modules[name].layer_idx = module.layer_idx
             model._modules[name].flash_forward = model._modules[name].forward
             model._modules[name].forward = types.MethodType(
                 forward, model._modules[name]
